@@ -1,0 +1,29 @@
+name: TW Stock Open High-Volume Agent
+
+on:
+  schedule:
+    # 台灣時間 09:05 相當於 UTC 時間 01:05 (1-5 代表週一至週五)
+    - cron: '5 1 * * 1-5'
+  workflow_dispatch: # 允許您在 GitHub 網頁上手動點擊按鈕進行測試
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          pip install requests beautifulsoup4
+
+      - name: Run Stock Agent Script
+        env:
+          LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
+          LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
+        run: python app.py
