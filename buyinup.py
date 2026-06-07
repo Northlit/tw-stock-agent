@@ -1,0 +1,179 @@
+import os
+import re
+import datetime
+import requests
+from bs4 import BeautifulSoup
+
+def get_line_credentials():
+  # 從 GitHub Secrets 安全地讀取金鑰
+  line_token = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN")
+  line_user_id = os.environ.get("LINE_USER_ID")
+  return line_token, line_user_id
+
+def check_institutional_net_buy(code):
+  """
+  利用 FinMind API 檢查該股在最近 10 個交易日內，外資或投信是否呈現淨買超。
+  """
+  url = "https://api.finmindtrade.com/api/v4/data"
+  # 因為 10 個交易日包含週末，抓過去 20 天的日曆天比較保險
+  start_date = (datetime.date.today() - datetime.timedelta(days=20)).isoformat()
+  params = {
+    "dataset": "TaiwanStockInstitutionalInvestorsBuySell",
+    "data_id": code,
+    "start_date": start_date
+  }
+  try:
+    res = requests.get(url, params=params, timeout=10)
+    if res.status_code != 200:
+      return False, 0.0, 0.0
+    
+    result = res.json()
+    if result.get("status") != 200 or not result.get("data"):
+      return False, 0.0, 0.0
+    
+    raw_data = result["data"]
+    
+    # 1. 找出所有不重複的日期並排序，取出最新的 10 個交易日
+    all_dates = sorted(list(set(item["date"] for item in raw_data)))
+    last_10_dates = all_dates[-10:] if len(all_dates) >= 10 else all_dates
+    
+    if not last_10_dates:
+      return False, 0.0, 0.0
+        
+    # 2. 計算最新 10 個交易日的外資與投信買賣超（單位：張）
+    foreign_net = 0.0
+    trust_net = 0.0
+    
+    for item in raw_data:
+      if item["date"] in last_10_dates:
+        # 買進減賣出是「股數」，除以 1000 換算成「張數」
+        net_shares = float(item["buy"] - item["sell"])
+        net_sheets = net_shares / 1000.0
+        
+        if item["name"] == "Foreign_Investor":
+          foreign_net += net_sheets
+        elif item["name"] == "Investment_Trust":
+          trust_net += net_sheets
+          
+    # 只要 外資淨買超（> 0） 或 投信淨買超（> 0），即符合條件
+    is_net_buy = (foreign_net > 0) or (trust_net > 0)
+    return is_net_buy, round(foreign_net, 1), round(trust_net, 1)
+    
+  except Exception as e:
+    print(f"查詢 {code} 三大法人籌碼失敗 (預設放行): {e}")
+    # 異常時預設True，當作防呆
+    return True, 0.0, 0.0
+
+def fetch_high_volume_stocks():
+  """
+  分別爬取 Yahoo 股市的「外資買超排行」與「投信買超排行」，
+  並過濾出符合近 10 日法人淨買超的籌碼雙強股。
+  """
+  urls = [
+    "https://tw.stock.yahoo.com/rank/foreign-buy", # 外資買超排行
+    "https://tw.stock.yahoo.com/rank/trust-buy"    # 投信買超排行
+  ]
+  
+  headers = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+  }
+   
+  stocks = []
+  seen = set()
+  
+  for url in urls:
+    try:
+      res = requests.get(url, headers=headers, timeout=15)
+      if res.status_code != 200:
+        continue
+         
+      soup = BeautifulSoup(res.text, "html.parser")
+      links = soup.find_all('a', href=re.compile(r'/quote/\d+'))
+       
+      for link in links:
+        href = link.get('href', '')
+        match = re.search(r'/quote/(\d+)', href)
+        if match:
+          code = match.group(1)
+          # 避免外資和投信排行抓到重複的股票
+          if code in seen:
+            continue
+          seen.add(code)
+           
+          # 往上尋找該整行股票的容器
+          parent = link.find_parent('li') or link.find_parent('div', class_='D(f)')
+          if parent:
+            text_content = parent.get_text(separator='|')
+            parts = [p.strip() for p in text_content.split('|') if p.strip()]
+             
+            if len(parts) >= 6:
+              # 格式為： [代號, 名字, 股價, 漲跌, 漲跌幅, 今日法人買超張數...]
+              name = parts[1] if parts[1] != code else parts[0]
+              price = parts[2]
+              change_percent = parts[4]
+              today_buy = parts[5] # 今日法人買超張數
+              
+              # 核心籌碼過濾：檢查最近 10 個交易日，外資或投信是否呈現淨買超
+              is_net_buy, foreign_net, trust_net = check_institutional_net_buy(code)
+              
+              if is_net_buy:
+                f_sign = "+" if foreign_net > 0 else ""
+                t_sign = "+" if trust_net > 0 else ""
+                
+                # 標記這檔股票是在哪一個排行榜被發現的
+                source_label = "外資狂買股" if "foreign-buy" in url else "投信狂買股"
+                
+                stocks.append(
+                  f"📈 {code} {name} ({source_label})\n"
+                  f"  💰 股價: {price} ({change_percent})\n"
+                  f"  📊 今日買超: {today_buy} 張\n"
+                  f"  🔥 近10日籌碼: 外資 {f_sign}{foreign_net}張 | 投信 {t_sign}{trust_net}張"
+                )
+           
+          # 外資與投信合併後，我們總共挑出最強的 10 檔即可
+          if len(stocks) >= 10:
+            break
+             
+      if len(stocks) >= 10:
+        break
+        
+    except Exception as e:
+      print(f"爬取 {url} 排行時發生錯誤: {e}")
+      continue
+       
+  if not stocks:
+    return "🔔 台股開盤法人買超提醒 🔔\n\n今日未篩選出符合「近 10 日外資或投信淨買超」的籌碼強勢股。"
+     
+  message = "🔔 台股 09:05 法人籌碼雙強排行 (排除爆量雜訊) 🔔\n\n" + "\n\n".join(stocks)
+  return message
+
+def send_to_line(message):
+  token, user_id = get_line_credentials()
+  if not token or not user_id:
+    print("錯誤：未設定 LINE 金鑰與 User ID")
+    return
+     
+  url = "https://api.line.me/v2/bot/message/push"
+  headers = {
+    "Content-Type": "application/json",
+    "Authorization": f"Bearer {token}"
+  }
+  payload = {
+    "to": user_id,
+    "messages": [
+      {
+        "type": "text",
+        "text": message
+      }
+    ]
+  }
+   
+  response = requests.post(url, json=payload, headers=headers)
+  if response.status_code == 200:
+    print("✅ LINE 訊息發送成功！")
+  else:
+    print(f"❌ 訊息發送失敗，狀態碼：{response.status_code}，錯誤訊息：{response.text}")
+
+if __name__ == "__main__":
+  report = fetch_high_volume_stocks()
+  send_to_line(report)
