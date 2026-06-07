@@ -1,0 +1,29 @@
+name: Daily Stock Run
+
+on:
+  schedule:
+    # 早上 9:05 分執行 (1:05 UTC)
+    - cron: '5 1 * * 1-5'
+  workflow_dispatch: # 支援在 Actions 頁面手動點擊「Run workflow」按鈕測試
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Install dependencies
+        run: |
+          pip install requests beautifulsoup4
+
+      - name: Run app.py
+        env:
+          LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
+          LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
+        run: python app.py
