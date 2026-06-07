@@ -48,7 +48,7 @@ def fetch_high_volume_stocks():
                     
                     if len(parts) >= 5:
                         # 格式通常為： [代號, 名字, 股價, 漲跌, 漲跌幅, 成交量...]
-                        name = parts 1  if parts 1  != code else parts 0 
+                        name = parts[1] if parts[1] != code else parts[0]
                         price = parts 2 
                         change_percent = parts 4 
                         volume = parts 5  if 'K' in parts 5  or parts 5 .isdigit() else "讀取中"
