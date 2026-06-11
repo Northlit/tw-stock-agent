@@ -216,39 +216,3 @@ def send_to_line(message):
 if __name__ == "__main__":
   report = fetch_margin_decrease_stocks()
   send_to_line(report)
-🛠️ 步驟二：建立專屬的定時工作流程 .github/workflows/margin_decrease.yml
-我們建立一個獨立的排程，一樣定在 台灣時間每天晚上 21:00 自動執行（這時當天的信用交易融資餘額都已經全數公佈完畢了，數據最精確）：
-
-請在專案中點選 Add file $\rightarrow$ Create new file，檔名輸入（⚠️ 請注意完整目錄與小寫）： .github/workflows/margin_decrease.yml
-
-並貼入以下 2026 最新規格的排程設定：
-
-name: Daily Margin Decrease Run
-
-on:
-  schedule:
-    # 每天晚上 21:00 自動執行一次 (13:00 UTC)
-    - cron: '0 13 * * *'
-  workflow_dispatch: # 支援手動點擊「Run workflow」測試
-
-jobs:
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.9'
-
-      - name: Install dependencies
-        run: |
-          pip install requests beautifulsoup4
-
-      - name: Run margin_decrease.py
-        env:
-          LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
-          LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
-        run: python margin_decrease.py
